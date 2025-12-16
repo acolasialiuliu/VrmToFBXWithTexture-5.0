@@ -33,15 +33,33 @@ def copy_vrm(context):
                 if not mat.use_nodes:
                     continue
                 
-                base_color_img = None
-
                 #Defining node variables
                 nodes = mat.node_tree.nodes
                 output = next((n for n in nodes if isinstance(n, bpy.types.ShaderNodeOutputMaterial)), None)
 
+                # Try to find base color texture by checking links or any texture node
+                base_color_img = None
+                # First, try to find by name (original method)
                 for n in nodes:
                     if isinstance(n, bpy.types.ShaderNodeTexImage):
                         if n.name == "Mtoon1BaseColorTexture.Image":
+                            base_color_img = unpack_node_img(n)
+                            break
+                
+                # If not found, try to find any texture node connected to base color
+                if base_color_img is None:
+                    for n in nodes:
+                        if isinstance(n, bpy.types.ShaderNodeBsdfPrincipled) or isinstance(n, bpy.types.ShaderNodeBsdfDiffuse):
+                            if n.inputs['Base Color'].is_linked:
+                                link_node = n.inputs['Base Color'].links[0].from_node
+                                if isinstance(link_node, bpy.types.ShaderNodeTexImage):
+                                    base_color_img = unpack_node_img(link_node)
+                                    break
+                
+                # If still not found, use any texture node as fallback
+                if base_color_img is None:
+                    for n in nodes:
+                        if isinstance(n, bpy.types.ShaderNodeTexImage):
                             base_color_img = unpack_node_img(n)
                             break
 
@@ -59,15 +77,34 @@ def copy_vrm(context):
                 mat_new.use_nodes = True
                 node_tree_new = mat_new.node_tree
                 nodes_new = node_tree_new.nodes
-                output = nodes_new.get('Material Output')
-                #Creating Principled node
-                principled = nodes_new.get("Principled BSDF")
+                
+                # Clear default nodes
+                for node in nodes_new:
+                    nodes_new.remove(node)
+                
+                # Create Material Output node
+                output = nodes_new.new(type='ShaderNodeOutputMaterial')
+                output.location = (300, 0)
+                
+                # Create Principled BSDF node
+                principled = nodes_new.new(type="ShaderNodeBsdfPrincipled")
+                principled.location = (0, 0)
 
+                # Create and set up texture node
                 base_color = nodes_new.new(type = "ShaderNodeTexImage")
-                base_color.location = (principled.location[0] - 300, principled.location[1])
+                base_color.location = (-300, 0)
                 base_color.image = base_color_img
-                node_tree_new.links.new(base_color.outputs[0], principled.inputs[0])
-                node_tree_new.links.new(base_color.outputs[1], principled.inputs[21])
+                
+                # Connect nodes
+                node_tree_new.links.new(base_color.outputs[0], principled.inputs['Base Color'])
+                
+                # If texture has alpha channel, connect to alpha input
+                if base_color.image and base_color.image.channels == 4:
+                    node_tree_new.links.new(base_color.outputs[1], principled.inputs['Alpha'])
+                    mat_new.blend_method = 'BLEND'  # Ensure blend method is set for transparency
+                
+                # Connect Principled BSDF to Material Output
+                node_tree_new.links.new(principled.outputs[0], output.inputs['Surface'])
 
                 obj_mats[i] = mat_new
 
